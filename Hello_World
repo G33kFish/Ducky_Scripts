@@ -1,0 +1,6 @@
+REM TITLE Fist Ducky Script
+REM AUTHOR G33kFish/G33kPhish
+REM DESCRIPTION Hello World!
+DELAY 3000
+STRING Hello World!
+ENTER 
