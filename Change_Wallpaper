@@ -1,0 +1,24 @@
+DELAY 500
+REM Open the Run dialog
+GUI r
+DELAY 500
+REM Type the command to open the Personalization settings
+STRING control /name Microsoft.Personalization /page Wallpaper
+ENTER
+DELAY 1000
+REM Wait for the window to open
+DELAY 1000
+REM Simulate pressing the Tab key to navigate to the background settings
+TAB
+TAB
+TAB
+ENTER
+DELAY 500
+REM Navigate to the first wallpaper option
+DOWN
+DOWN
+DOWN
+ENTER
+DELAY 500
+REM Close the settings window
+ALT F4
