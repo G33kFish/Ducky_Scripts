@@ -1,0 +1,29 @@
+REM === Bash Bunny: Change Wallpaper from Bunny Storage ===
+
+ATTACKMODE HID STORAGE
+LED AMBER
+DELAY 5000
+
+REM Open Run dialog
+LED BLUE
+GUI r
+DELAY 500
+
+REM Launch PowerShell
+STRING powershell
+ENTER
+DELAY 1000
+
+REM Set wallpaper from Bunny drive
+LED PURPLE
+STRING $drive=(Get-Volume | Where-Object {$_.FileSystemLabel -eq "BASHBUNNY"}).DriveLetter
+ENTER
+STRING $path="$drive`:\wallpaper.jpg"
+ENTER
+ENTER
+STRING Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class W { [DllImport("user32.dll",SetLastError=true)] public static extern bool SystemParametersInfo(int uAction,int uParam,string lpvParam,int fuWinIni); }'
+ENTER
+STRING [W]::SystemParametersInfo(20,0,$path,3)
+ENTER
+
+LED GREEN
