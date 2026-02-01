@@ -1,0 +1,107 @@
+REM === Bash Bunny: Rapid Workstation Triage (IR-lite) ===
+REM Target: Windows 10/11 | Keyboard: US
+REM Authorized IT use only
+
+ATTACKMODE HID STORAGE
+LED AMBER
+DELAY 7000
+
+REM Open Run
+GUI r
+DELAY 400
+
+REM Launch PowerShell (non-admin works; admin gives richer data)
+STRING powershell
+ENTER
+DELAY 1200
+
+LED BLUE
+
+REM ---- PowerShell Collector (inline) ----
+STRING powershell -NoProfile -ExecutionPolicy Bypass -Command "
+$ErrorActionPreference='Continue';
+$ts=Get-Date -Format 'yyyyMMdd_HHmmss';
+$hn=$env:COMPUTERNAME;
+$lootName=(''+$hn+'-'+$ts);
+$tmp=Join-Path $env:TEMP $lootName;
+New-Item -ItemType Directory -Path $tmp -Force | Out-Null;
+
+function OutFile($name,$content){ $p=Join-Path $tmp $name; $content | Out-File -FilePath $p -Encoding UTF8; }
+
+# Identity
+OutFile 'identity.txt' @(
+ 'Hostname: '+$hn,
+ 'User: '+$env:USERDOMAIN+'\\'+$env:USERNAME
+);
+
+# Network basics
+OutFile 'ipconfig_all.txt' (ipconfig /all | Out-String);
+OutFile 'routes.txt' (route print | Out-String);
+
+# Wi-Fi SSID (best effort)
+try {
+  $ssid = (netsh wlan show interfaces | Select-String 'SSID' | Select-Object -First 1).ToString()
+  OutFile 'wifi_ssid.txt' $ssid
+} catch {}
+
+# Uptime
+$uptime = (Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime;
+OutFile 'uptime.txt' ('Uptime: '+$uptime.ToString());
+
+# AV / EDR status (Security Center)
+try {
+  $av = Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct |
+        Select-Object displayName,productState,pathToSignedProductExe;
+  OutFile 'av_status.txt' ($av | Format-List | Out-String)
+} catch {
+  OutFile 'av_status.txt' 'SecurityCenter2 unavailable'
+}
+
+# Disk space
+OutFile 'disk_space.txt' (Get-PSDrive -PSProvider FileSystem | Select Name,Used,Free | Format-Table -Auto | Out-String);
+
+# Installed hotfixes
+OutFile 'hotfixes.txt' (Get-HotFix | Sort InstalledOn -Descending | Format-Table -Auto | Out-String);
+
+# Running processes (top 200 by CPU)
+OutFile 'processes_top_cpu.txt' (Get-Process | Sort CPU -Descending | Select -First 200 | Format-Table -Auto | Out-String);
+
+# Startup items
+OutFile 'startup_items.txt' (
+  (Get-CimInstance Win32_StartupCommand | Select Name,Command,Location,User | Format-Table -Auto | Out-String)
+);
+
+# Event logs (recent highlights)
+OutFile 'eventlog_system_recent.txt' (
+  Get-WinEvent -LogName System -MaxEvents 200 |
+  Where-Object {$_.LevelDisplayName -in 'Error','Warning'} |
+  Select TimeCreated,LevelDisplayName,ProviderName,Id,Message |
+  Format-Table -Wrap -Auto | Out-String
+);
+
+try {
+  OutFile 'eventlog_security_recent.txt' (
+    Get-WinEvent -LogName Security -MaxEvents 200 |
+    Where-Object {$_.LevelDisplayName -in 'Error','Warning'} |
+    Select TimeCreated,LevelDisplayName,ProviderName,Id,Message |
+    Format-Table -Wrap -Auto | Out-String
+  )
+} catch {
+  OutFile 'eventlog_security_recent.txt' 'Access denied (non-admin)'
+}
+
+# ---- Copy to Bunny /loot ----
+$vol = Get-Volume | Where-Object {$_.FileSystemLabel -match 'BASHBUNNY|Bunny|USB'} | Select-Object -First 1;
+if ($vol) {
+  $dest = '{0}:\loot\{1}' -f $vol.DriveLetter,$lootName;
+  New-Item -ItemType Directory -Path $dest -Force | Out-Null;
+  Copy-Item -Path (Join-Path $tmp '*') -Destination $dest -Recurse -Force;
+  'Copied to '+$dest | Out-File (Join-Path $tmp 'copy_status.txt')
+} else {
+  'Bunny storage not found' | Out-File (Join-Path $tmp 'copy_status.txt')
+}
+"
+ENTER
+
+DELAY 2000
+LED GREEN
