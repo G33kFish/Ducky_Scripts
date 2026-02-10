@@ -1,0 +1,226 @@
+#!/bin/bash
+# ============================================================
+# Bash Bunny: Helpdesk Triage (FAST / STANDARD / DEEP)
+# Switch 1: FAST
+# Switch 2: STANDARD
+# Switch 3: DEEP
+# Target: Windows 10/11
+# ============================================================
+
+ATTACKMODE HID STORAGE
+LED AMBER
+
+# --- Wait for enumeration (more reliable than fixed delays) ---
+sleep 2
+WAIT_FOR_HID
+WAIT_FOR_STORAGE
+sleep 2
+
+# Loot folder
+TS="$(date +%Y%m%d_%H%M%S)"
+LOOT_DIR="/loot/Triage_${TS}"
+mkdir -p "$LOOT_DIR"
+
+# Helper to run a PowerShell one-liner via QUACK
+run_ps() {
+  local CMD="$1"
+  QUACK GUI r
+  QUACK DELAY 400
+  QUACK STRING "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$CMD\""
+  QUACK ENTER
+}
+
+# PowerShell payload builder (returns a single command string)
+# We pass MODE = FAST | STANDARD | DEEP
+ps_command() {
+  local MODE="$1"
+
+  # Note: We use the Bunny's drive letter by detecting a volume label.
+  # If your Bunny label differs, edit the regex in $vol line.
+
+  cat <<'PS' | tr -d '\n'
+$ErrorActionPreference='Continue';
+$mode='__MODE__';
+$ts=Get-Date -Format 'yyyyMMdd_HHmmss';
+$hn=$env:COMPUTERNAME;
+
+# Working directory in TEMP
+$work=Join-Path $env:TEMP ("HelpdeskTriage_"+$hn+"_"+$ts);
+New-Item -ItemType Directory -Path $work -Force | Out-Null;
+
+$log=Join-Path $work ("triage_"+$mode+"_"+$hn+"_"+$ts+".log");
+function Log($m){('[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),$m) | Tee-Object -FilePath $log -Append | Out-Null}
+
+Log("Mode: $mode");
+Log(("User: {0}\{1}" -f $env:USERDOMAIN,$env:USERNAME));
+try {
+  $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);
+  Log("Admin: "+$isAdmin);
+} catch {}
+
+# FAST (always)
+Log("--- Identity / Uptime ---");
+try {
+  $os=Get-CimInstance Win32_OperatingSystem;
+  $uptime=(Get-Date) - $os.LastBootUpTime;
+  "Hostname: $hn`nUptime: $uptime" | Out-File (Join-Path $work "identity_uptime.txt") -Encoding UTF8
+} catch {}
+
+Log("--- Network ---");
+(ipconfig /all | Out-String) | Out-File (Join-Path $work "ipconfig_all.txt") -Encoding UTF8
+(route print | Out-String) | Out-File (Join-Path $work "routes.txt") -Encoding UTF8
+try {
+  (netsh wlan show interfaces | Out-String) | Out-File (Join-Path $work "wifi_interfaces.txt") -Encoding UTF8
+} catch {}
+
+# Connectivity mini-report
+try {
+  $rep=Join-Path $work ("connectivity_"+$mode+"_"+$hn+"_"+$ts+".txt");
+  "=== Test-NetConnection 8.8.8.8:53 ===" | Out-File $rep -Encoding UTF8;
+  try { (Test-NetConnection 8.8.8.8 -Port 53 | Out-String) | Out-File $rep -Append -Encoding UTF8 } catch { "Test-NetConnection failed/unavailable" | Out-File $rep -Append -Encoding UTF8 }
+  "=== Ping google.com ===" | Out-File $rep -Append -Encoding UTF8;
+  (ping -n 4 google.com | Out-String) | Out-File $rep -Append -Encoding UTF8;
+} catch {}
+
+# STANDARD+
+if ($mode -ne 'FAST') {
+  Log("--- AV / EDR (SecurityCenter2) ---");
+  try {
+    $av = Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct |
+          Select-Object displayName,productState,pathToSignedProductExe;
+    ($av | Format-List | Out-String) | Out-File (Join-Path $work "av_status.txt") -Encoding UTF8
+  } catch {
+    "SecurityCenter2 unavailable" | Out-File (Join-Path $work "av_status.txt") -Encoding UTF8
+  }
+
+  Log("--- Disk / Hotfixes / Startup ---");
+  (Get-PSDrive -PSProvider FileSystem | Select Name,Used,Free | Format-Table -Auto | Out-String) |
+    Out-File (Join-Path $work "disk_space.txt") -Encoding UTF8
+
+  try {
+    (Get-HotFix | Sort InstalledOn -Descending | Format-Table -Auto | Out-String) |
+      Out-File (Join-Path $work "hotfixes.txt") -Encoding UTF8
+  } catch {}
+
+  try {
+    (Get-CimInstance Win32_StartupCommand | Select Name,Command,Location,User | Format-Table -Auto | Out-String) |
+      Out-File (Join-Path $work "startup_items.txt") -Encoding UTF8
+  } catch {}
+
+  Log("--- Processes (Top CPU) ---");
+  try {
+    (Get-Process | Sort CPU -Descending | Select -First 200 | Format-Table -Auto | Out-String) |
+      Out-File (Join-Path $work "processes_top_cpu.txt") -Encoding UTF8
+  } catch {}
+
+  Log("--- Event Logs (recent errors/warnings) ---");
+  try {
+    (Get-WinEvent -LogName System -MaxEvents 300 |
+      Where-Object {$_.LevelDisplayName -in 'Error','Warning'} |
+      Select TimeCreated,LevelDisplayName,ProviderName,Id,Message |
+      Format-Table -Wrap -Auto | Out-String) |
+      Out-File (Join-Path $work "eventlog_system_recent.txt") -Encoding UTF8
+  } catch {}
+
+  try {
+    (Get-WinEvent -LogName Security -MaxEvents 200 |
+      Where-Object {$_.LevelDisplayName -in 'Error','Warning'} |
+      Select TimeCreated,LevelDisplayName,ProviderName,Id,Message |
+      Format-Table -Wrap -Auto | Out-String) |
+      Out-File (Join-Path $work "eventlog_security_recent.txt") -Encoding UTF8
+  } catch {
+    "Access denied (likely non-admin)" | Out-File (Join-Path $work "eventlog_security_recent.txt") -Encoding UTF8
+  }
+}
+
+# DEEP
+if ($mode -eq 'DEEP') {
+  Log("--- DEEP: More processes + more events ---");
+  try {
+    (Get-Process | Sort CPU -Descending | Format-Table -Auto | Out-String) |
+      Out-File (Join-Path $work "processes_all_sorted_cpu.txt") -Encoding UTF8
+  } catch {}
+
+  try {
+    (Get-WinEvent -LogName System -MaxEvents 1200 |
+      Select TimeCreated,LevelDisplayName,ProviderName,Id,Message |
+      Format-Table -Wrap -Auto | Out-String) |
+      Out-File (Join-Path $work "eventlog_system_deep.txt") -Encoding UTF8
+  } catch {}
+
+  try {
+    (Get-WinEvent -LogName Application -MaxEvents 800 |
+      Where-Object {$_.LevelDisplayName -in 'Error','Warning'} |
+      Select TimeCreated,LevelDisplayName,ProviderName,Id,Message |
+      Format-Table -Wrap -Auto | Out-String) |
+      Out-File (Join-Path $work "eventlog_app_recent.txt") -Encoding UTF8
+  } catch {}
+}
+
+# Copy to Bunny by detecting its mounted volume label
+try {
+  $vol = Get-Volume | Where-Object { $_.FileSystemLabel -match 'BASHBUNNY|Bunny|USB' } | Select-Object -First 1;
+  if ($vol) {
+    $dest = ('{0}:\loot\Triage_{1}_{2}' -f $vol.DriveLetter,$hn,$ts);
+    New-Item -ItemType Directory -Path $dest -Force | Out-Null;
+    Copy-Item -Path (Join-Path $work '*') -Destination $dest -Recurse -Force;
+
+    # Simple summary
+    $sum = Join-Path $work ("summary_"+$mode+"_"+$hn+"_"+$ts+".txt");
+    @(
+      "Mode: $mode",
+      "Host: $hn",
+      "WorkDir: $work",
+      "CopiedTo: $dest",
+      "Log: $log"
+    ) | Out-File $sum -Encoding UTF8;
+
+    Copy-Item -Path $sum -Destination $dest -Force;
+    Log("Copied to Bunny: "+$dest);
+  } else {
+    Log("No Bunny storage volume detected. Artifacts remain in: "+$work);
+  }
+} catch {
+  Log("Copy failed: "+$_.Exception.Message);
+}
+
+Log("Complete.");
+PS
+}
+
+# Determine switch position -> mode
+case "$SWITCH_POSITION" in
+  1)
+    LED BLUE
+    MODE="FAST"
+    ;;
+  2)
+    LED PURPLE
+    MODE="STANDARD"
+    ;;
+  3)
+    LED YELLOW
+    MODE="DEEP"
+    ;;
+  *)
+    LED RED
+    exit 1
+    ;;
+esac
+
+# Build PS command with mode substituted safely
+PS_CMD="$(ps_command "$MODE")"
+PS_CMD="${PS_CMD/__MODE__/$MODE}"
+
+# Run it
+run_ps "$PS_CMD"
+
+# Give it time (FAST finishes quickly; DEEP may take longer)
+# Adjust these if you want more/less waiting.
+case "$MODE" in
+  FAST)     sleep 8 ;;
+  STANDARD) sleep 20 ;;
+  DEEP)     sleep 35 ;;
+esac
+
+LED GREEN
