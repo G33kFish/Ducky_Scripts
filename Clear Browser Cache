@@ -1,0 +1,124 @@
+#!/bin/bash
+# ============================================================
+# Browser Cache Cleanup (Helpdesk Safe)
+# Switch 1: FAST
+# Switch 2: STANDARD
+# Switch 3: DEEP
+# Windows 10/11
+# ============================================================
+
+ATTACKMODE HID STORAGE
+LED AMBER
+
+sleep 2
+WAIT_FOR_HID
+WAIT_FOR_STORAGE
+sleep 2
+
+TS="$(date +%Y%m%d_%H%M%S)"
+LOOT_DIR="/loot/BrowserCleanup_${TS}"
+mkdir -p "$LOOT_DIR"
+
+run_ps() {
+  local CMD="$1"
+  QUACK GUI r
+  QUACK DELAY 400
+  QUACK STRING "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$CMD\""
+  QUACK ENTER
+}
+
+case "$SWITCH_POSITION" in
+  1) MODE="FAST"; LED BLUE ;;
+  2) MODE="STANDARD"; LED PURPLE ;;
+  3) MODE="DEEP"; LED YELLOW ;;
+  *) LED RED; exit 1 ;;
+esac
+
+PS_COMMAND=$(cat <<'PS'
+$ErrorActionPreference='SilentlyContinue';
+$mode='__MODE__';
+$ts=Get-Date -Format 'yyyyMMdd_HHmmss';
+$hn=$env:COMPUTERNAME;
+
+$work=Join-Path $env:TEMP ("BrowserCleanup_"+$hn+"_"+$ts);
+New-Item -ItemType Directory -Path $work -Force | Out-Null;
+$log=Join-Path $work ("cleanup_"+$mode+"_"+$hn+"_"+$ts+".log");
+
+function Log($m){
+  ('[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),$m) |
+  Tee-Object -FilePath $log -Append | Out-Null
+}
+
+Log("Mode: $mode")
+
+# Close browsers gracefully
+$browserProcs = "chrome","msedge","firefox"
+foreach($b in $browserProcs){
+  Get-Process $b -ErrorAction SilentlyContinue | ForEach-Object {
+    Log("Closing process: $($_.ProcessName)")
+    $_.CloseMainWindow() | Out-Null
+    Start-Sleep -Milliseconds 500
+    if(!$_.HasExited){ $_ | Stop-Process -Force }
+  }
+}
+
+# Chrome
+$chromePath = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default"
+if(Test-Path $chromePath){
+  Remove-Item "$chromePath\Cache" -Recurse -Force -ErrorAction SilentlyContinue
+  Log("Chrome cache cleared")
+}
+
+# Edge
+$edgePath = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default"
+if(Test-Path $edgePath){
+  Remove-Item "$edgePath\Cache" -Recurse -Force -ErrorAction SilentlyContinue
+  Log("Edge cache cleared")
+}
+
+# Firefox
+$ffProfiles = "$env:APPDATA\Mozilla\Firefox\Profiles"
+if(Test-Path $ffProfiles){
+  Get-ChildItem $ffProfiles -Directory | ForEach-Object {
+    Remove-Item "$($_.FullName)\cache2" -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  Log("Firefox cache cleared")
+}
+
+# STANDARD additions
+if($mode -ne 'FAST'){
+  Log("Clearing Windows Temp")
+  Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# DEEP additions
+if($mode -eq 'DEEP'){
+  Log("Clearing WinINET cache")
+  RunDll32.exe InetCpl.cpl,ClearMyTracksByProcess 255
+}
+
+# Copy to Bunny
+try {
+  $vol = Get-Volume | Where-Object { $_.FileSystemLabel -match 'BASHBUNNY|Bunny|USB' } | Select-Object -First 1;
+  if($vol){
+    $dest = ('{0}:\loot\BrowserCleanup_{1}_{2}' -f $vol.DriveLetter,$hn,$ts)
+    New-Item -ItemType Directory -Path $dest -Force | Out-Null
+    Copy-Item -Path (Join-Path $work '*') -Destination $dest -Recurse -Force
+    Log("Copied to Bunny: "+$dest)
+  } else {
+    Log("Bunny storage not found")
+  }
+} catch {
+  Log("Copy failed")
+}
+
+Log("Complete")
+PS
+)
+
+PS_COMMAND="${PS_COMMAND/__MODE__/$MODE}"
+
+run_ps "$PS_COMMAND"
+
+sleep 10
+LED GREEN
