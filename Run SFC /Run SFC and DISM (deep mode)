@@ -1,0 +1,33 @@
+REM === Deep Mode: SFC + DISM with Logging (Windows 10/11) ===
+ATTACKMODE HID STORAGE
+LED AMBER
+DELAY 7000
+
+REM Open Run
+LED BLUE
+GUI r
+DELAY 400
+
+REM Launch PowerShell as Admin
+STRING powershell
+DELAY 200
+CTRL SHIFT ENTER
+DELAY 2000
+
+REM Accept UAC (US keyboard). Retry helps focus.
+LED PURPLE
+ALT y
+DELAY 1200
+ALT y
+DELAY 800
+
+REM Run SFC + DISM, log to TEMP, then copy to Bunny loot
+LED YELLOW
+STRING powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Continue'; $ts=Get-Date -Format 'yyyyMMdd_HHmmss'; $hn=$env:COMPUTERNAME; $work=Join-Path $env:TEMP ('SFC_DISM_'+$hn+'_'+$ts); New-Item -ItemType Directory -Path $work -Force | Out-Null; $log=Join-Path $work ('SFC_DISM_'+$hn+'_'+$ts+'.log'); function Log($m){('[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),$m) | Tee-Object -FilePath $log -Append | Out-Null}; Log('Starting deep repair'); Log(('Admin: {0}' -f ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))); Log('Running: sfc /scannow'); cmd /c 'sfc /scannow' 2>&1 | Tee-Object -FilePath (Join-Path $work 'sfc_output.txt') | Out-Null; $sfcExit=$LASTEXITCODE; Log(('SFC exit code: {0}' -f $sfcExit)); Log('Running: DISM /Online /Cleanup-Image /RestoreHealth'); cmd /c 'DISM /Online /Cleanup-Image /RestoreHealth' 2>&1 | Tee-Object -FilePath (Join-Path $work 'dism_output.txt') | Out-Null; $dismExit=$LASTEXITCODE; Log(('DISM exit code: {0}' -f $dismExit)); $sum=Join-Path $work ('summary_'+$hn+'_'+$ts+'.txt'); @('Host: '+$hn,'Time: '+$ts,'SFCExit: '+$sfcExit,'DISMExit: '+$dismExit,'WorkDir: '+$work) | Out-File $sum -Encoding UTF8; try { $vol=Get-Volume | Where-Object {$_.FileSystemLabel -match 'BASHBUNNY|Bunny|USB'} | Select-Object -First 1; if($vol){ $dest=('{0}:\loot\SFC_DISM_{1}_{2}' -f $vol.DriveLetter,$hn,$ts); New-Item -ItemType Directory -Path $dest -Force | Out-Null; Copy-Item -Path (Join-Path $work '*') -Destination $dest -Recurse -Force; Log('Copied logs to: '+$dest) } else { Log('Bunny storage not found; logs remain in '+$work) } } catch { Log('Copy-to-Bunny failed: '+$_.Exception.Message) }; Log('Complete. Reboot may be recommended.');"
+ENTER
+
+REM DISM can take a long time; keep LED indicating "working"
+LED CYAN
+DELAY 5000
+
+LED GREEN
